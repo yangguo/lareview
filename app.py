@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 
-from lareview import combine_df_id
-
 def main():
 
     st.subheader("Upload system logical access control file")
