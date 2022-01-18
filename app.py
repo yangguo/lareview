@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from lareview import find_duplicate_userid
 
 def main():
 
@@ -95,15 +96,26 @@ def main():
 
             # get dflacurrent which dfcurrent_id is null
             dflacurrent_null=dflacurrent[dflacurrent[dfcurrent_id].isnull()]
+            st.subheader('System LA not found in HR list')
             st.warning('System LA not found in HR list '+str(dflacurrent_null.shape))
-            st.write(dflacurrent_null.astype(str))
+            st.table(dflacurrent_null.astype(str))
             st.download_button(data=dflacurrent_null.to_csv(index=False),label='Download data',file_name='dflacurrent_null.csv')
 
             # display dfladeparture
+            st.subheader('System LA found in HR departure list')
             st.warning('System LA found in HR departure list '+str(dfladeparture.shape))
-            st.write(dfladeparture.astype(str))
+            st.table(dfladeparture.astype(str))
             st.download_button(data=dfladeparture.to_csv(index=False),label='Download data',file_name='dfladeparture.csv')
-        
+
+            # display duplicate userid
+            st.subheader('Duplicate userid')
+            userls=dfla[dfla_id].tolist()
+            dupdict=find_duplicate_userid(userls)
+            for key,value in dupdict.items():
+                st.warning('Duplicate userid '+str(key)+' index '+str(value))
+                udfla=dfla[dfla.index.isin(value)]
+                st.table(udfla.astype(str))
+            
 
 if __name__ == '__main__':
     main()
