@@ -29,8 +29,20 @@ def main():
         # select user id column
         hcols = st.sidebar.multiselect('User ID column', cols)
 
-        # select content columns
+       # select content columns
         dcols = st.sidebar.multiselect('Content column', cols)
+
+        # select filter columns
+        fcols = st.sidebar.multiselect('Filter column', cols)
+
+        # get filter value list
+        if fcols:
+            fcol=fcols[0]
+            fval=df[fcol].astype(str).unique()
+            # choose filter value
+            fval_select=st.sidebar.selectbox('Choose filter value',fval)
+        else:
+            fval_select=None
 
         # radio button to choose report type
         report_type = st.sidebar.radio('Choose file type', ('System LA list', 'HR employee list','HR departure list'))
@@ -51,18 +63,26 @@ def main():
 
 
         def savedf():
+            if fcols:
+                dffilter=df[df[fcol]==fval_select].reset_index(drop=True)
+            else:
+                dffilter=df
+            allcols=hcols+dcols+fcols
+            # filter duplicate column list
+            allcols=list(set(allcols))
+            
             if report_type == 'System LA list':
                 # st.warning('This is a system LA list report')
-                st.session_state.dfla=df[hcols+dcols]
+                st.session_state.dfla=dffilter[allcols]
                 st.session_state.dfla_id = hcols[0]
             
             if report_type == 'HR employee list':
                 # st.warning('This is a HR employee list report')
-                st.session_state.dfcurrent=df[hcols+dcols]
+                st.session_state.dfcurrent=dffilter[allcols]
                 st.session_state.dfcurrent_id = hcols[0]
             
             if report_type=='HR departure list':
-                st.session_state.dfdeparture=df[hcols+dcols]
+                st.session_state.dfdeparture=dffilter[allcols]
                 st.session_state.dfdeparture_id = hcols[0]
     
         # click button to generate docx
@@ -72,7 +92,7 @@ def main():
         dfla=st.session_state.dfla
         st.warning('system LA list report '+str(dfla.shape))
         st.write(dfla.astype(str))
-        
+
         # if report_type == 'HR employee list':
         dfcurrent=st.session_state.dfcurrent
         st.warning('HR employee list report '+str(dfcurrent.shape))
@@ -97,22 +117,28 @@ def main():
             # get dflacurrent which dfcurrent_id is null
             dflacurrent_null=dflacurrent[dflacurrent[dfcurrent_id].isnull()]
             st.subheader('System LA not found in HR list')
-            st.warning('System LA not found in HR list '+str(dflacurrent_null.shape))
-            st.table(dflacurrent_null.astype(str))
-            st.download_button(data=dflacurrent_null.to_csv(index=False),label='Download data',file_name='dflacurrent_null.csv')
+            if dflacurrent_null.shape[0]>0:
+                st.warning('System LA not found in HR list '+str(dflacurrent_null.shape))
+                st.table(dflacurrent_null.astype(str))
+                st.download_button(data=dflacurrent_null.to_csv(index=False),label='Download data',file_name='dflacurrent_null.csv')
+            else:
+                st.success('All System LA found in HR list ')
 
             # display dfladeparture
             st.subheader('System LA found in HR departure list')
-            st.warning('System LA found in HR departure list '+str(dfladeparture.shape))
-            st.table(dfladeparture.astype(str))
-            st.download_button(data=dfladeparture.to_csv(index=False),label='Download data',file_name='dfladeparture.csv')
+            if dfladeparture.shape[0]>0:
+                st.warning('System LA found in HR departure list '+str(dfladeparture.shape))
+                st.table(dfladeparture.astype(str))
+                st.download_button(data=dfladeparture.to_csv(index=False),label='Download data',file_name='dfladeparture.csv')
+            else:
+                st.success('No System LA found in HR departure list')
 
             # display duplicate userid
             st.subheader('Duplicate userid')
             userls=dfla[dfla_id].tolist()
             dupdict=find_duplicate_userid(userls)
             for key,value in dupdict.items():
-                st.warning('Duplicate userid '+str(key)+' index '+str(value))
+                st.warning('Duplicate userid '+str(key)+' total '+str(len(value)))
                 udfla=dfla[dfla.index.isin(value)]
                 st.table(udfla.astype(str))
             
