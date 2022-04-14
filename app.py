@@ -29,6 +29,10 @@ def main():
         # select user id column
         hcols = st.sidebar.multiselect('User ID column', cols)
 
+        if hcols==[]:
+            st.sidebar.error('Please select user id column')
+            return
+
        # select content columns
         dcols = st.sidebar.multiselect('Content column', cols)
 
@@ -101,6 +105,11 @@ def main():
         dfdeparture=st.session_state.dfdeparture
         st.warning('HR departure list report '+str(dfdeparture.shape))
         st.write(dfdeparture.astype(str))
+        
+        # continue if dfla, dfcurrent, dfdeparture are not empty
+        if dfla.empty or dfcurrent.empty or dfdeparture.empty:
+            st.sidebar.error('Please upload all data first')
+            return
         
         # button to analysis
         if st.sidebar.button('Analysis'):
