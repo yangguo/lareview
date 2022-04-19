@@ -6,20 +6,25 @@ def main():
 
     st.subheader("Upload system logical access control file")
     # upload excel file
-    file = st.file_uploader("Upload excel file", type=["xlsx", "xls"])
+    file = st.file_uploader("Upload excel file", type=["xlsx", "csv"])
     if file is not None:
+        # if file type is xlsx
+        if file.name.endswith('.xlsx'):
         # get sheet names list from excel file
-        xls = pd.ExcelFile(file)
-        sheets = xls.sheet_names
-        # choose sheet name and click button
-        sheet_name = st.selectbox('Choose sheetname', sheets)
-        # choose header row number and click button
-        header_row = st.number_input('Choose header row',
-                                        min_value=0,
-                                        max_value=10,
-                                        value=0)
+            xls = pd.ExcelFile(file)
+            sheets = xls.sheet_names
+            # choose sheet name and click button
+            sheet_name = st.selectbox('Choose sheetname', sheets)
+            # choose header row number and click button
+            header_row = st.number_input('Choose header row',
+                                            min_value=0,
+                                            max_value=10,
+                                            value=0)
 
-        df = pd.read_excel(file, header=header_row, sheet_name=sheet_name)
+            df = pd.read_excel(file, header=header_row, sheet_name=sheet_name)
+        # if file type is csv
+        elif file.name.endswith('.csv'):
+            df = pd.read_csv(file)
         st.write(df.astype(str))
  
         cols = df.columns
