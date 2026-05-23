@@ -135,3 +135,5 @@ dmypy.json
 .VSCodeCounter
 .vscode
 uploads
+frontend/node_modules/
+frontend/.next/
