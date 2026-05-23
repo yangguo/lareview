@@ -8,30 +8,61 @@ app_file: app.py
 pinned: false
 ---
 
-# Configuration
+# LA Review
 
-`title`: _string_
-Display title for the Space
+This repository now contains two experiences:
 
-`emoji`: _string_
-Space emoji (emoji-only character allowed)
+1. **Legacy Streamlit app** (`/app.py`) preserving the original upload-and-analyze workflow.
+2. **Agent backend + Next.js frontend scaffold** for refactoring to an LLM-assisted LangGraph architecture.
 
-`colorFrom`: _string_
-Color for Thumbnail gradient (red, yellow, green, blue, indigo, purple, pink, gray)
+## Target architecture
 
-`colorTo`: _string_
-Color for Thumbnail gradient (red, yellow, green, blue, indigo, purple, pink, gray)
+- **Frontend**: Next.js app in `/frontend`
+- **Backend API**: FastAPI app in `/backend/api.py`
+- **Agent workflow**: LangGraph pipeline in `/backend/workflow.py`
+- **Deterministic analysis layer**: ingestion/profiling/matching/reporting modules in `/backend`
 
-`sdk`: _string_
-Can be either `gradio`, `streamlit`, or `static`
+## Business outcomes preserved
 
-`sdk_version` : _string_
-Only applicable for `streamlit` SDK.  
-See [doc](https://hf.co/docs/hub/spaces) for more info on supported versions.
+The backend analysis still computes:
+- system-access users missing in active HR list
+- system-access users found in departure list
+- duplicate/overlapping account IDs (exact/normalized/substring policy)
 
-`app_file`: _string_
-Path to your main application file (which contains either `gradio` or `streamlit` Python code, or `static` html code).
-Path is relative to the root of the repository.
+## Backend endpoints
 
-`pinned`: _boolean_
-Whether the Space stays on top of your list.
+- `POST /api/sessions`
+- `POST /api/sessions/{session_id}/files`
+- `POST /api/sessions/{session_id}/detect`
+- `POST /api/sessions/{session_id}/confirm`
+- `POST /api/sessions/{session_id}/analyze`
+- `GET /api/sessions/{session_id}/jobs/{job_id}`
+- `GET /api/sessions/{session_id}/jobs/{job_id}/download/{artifact}`
+- `GET /api/sessions/{session_id}/runs`
+
+## Running locally
+
+### Python backend
+
+```bash
+pip install -r requirements.txt
+uvicorn backend.main:app --reload
+```
+
+### Next.js frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Set `NEXT_PUBLIC_API_URL` if backend is not running on `http://localhost:8000`.
+
+## Tests
+
+```bash
+python -m pytest -q
+```
+
+Regression fixtures are under `/tests/fixtures`.

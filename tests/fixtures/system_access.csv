@@ -1,0 +1,5 @@
+user_id,system,role
+A100,ERP,admin
+a100,CRM,user
+B200,ERP,user
+C300,CRM,user

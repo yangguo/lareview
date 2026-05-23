@@ -1,2 +1,10 @@
 pandas
 xlrd
+openpyxl
+streamlit
+fastapi
+uvicorn
+python-multipart
+pydantic
+langgraph
+pytest
