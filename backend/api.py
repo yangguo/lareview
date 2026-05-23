@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -18,6 +19,10 @@ store = SessionStore()
 detection = DetectionWorkflow(run_store=RUN_STORE)
 
 
+def _safe_identifier(value: str) -> str:
+    return str(UUID(value))
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -30,9 +35,10 @@ async def create_session() -> SessionCreateResponse:
 
 
 @app.post("/api/sessions/{session_id}/files")
-async def upload_files(session_id: str, files: list[UploadFile] = File(...)) -> dict[str, object]:
+async def upload_files(session_id: UUID, files: list[UploadFile] = File(...)) -> dict[str, object]:
+    session_key = _safe_identifier(str(session_id))
     try:
-        session = store.get(session_id)
+        session = store.get(session_key)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
 
@@ -48,20 +54,21 @@ async def upload_files(session_id: str, files: list[UploadFile] = File(...)) -> 
         all_candidates.extend(candidates)
 
     session.candidates = all_candidates
-    return {"session_id": session_id, "candidates": [c.model_dump() for c in all_candidates]}
+    return {"session_id": session_key, "candidates": [c.model_dump() for c in all_candidates]}
 
 
 @app.post("/api/sessions/{session_id}/detect")
-async def detect_tables(session_id: str) -> dict[str, object]:
+async def detect_tables(session_id: UUID) -> dict[str, object]:
+    session_key = _safe_identifier(str(session_id))
     try:
-        session = store.get(session_id)
+        session = store.get(session_key)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
 
     run_id = store.next_run_id()
     session.runs.append(run_id)
     detection_resp = detection.run(
-        session_id=session_id,
+        session_id=session_key,
         run_id=run_id,
         candidates=session.candidates,
         frames=session.tables,
@@ -70,13 +77,14 @@ async def detect_tables(session_id: str) -> dict[str, object]:
 
 
 @app.post("/api/sessions/{session_id}/confirm")
-async def confirm_mapping(session_id: str, mapping: dict[str, str]) -> dict[str, str]:
+async def confirm_mapping(session_id: UUID, mapping: dict[str, str]) -> dict[str, str]:
+    session_key = _safe_identifier(str(session_id))
     try:
-        session = store.get(session_id)
+        session = store.get(session_key)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
     session.mapping = mapping
-    return {"session_id": session_id, "status": "mapping_saved"}
+    return {"session_id": session_key, "status": "mapping_saved"}
 
 
 async def _run_analysis(session_id: str, job_id: str, payload: AnalysisRequest) -> None:
@@ -111,7 +119,7 @@ async def _run_analysis(session_id: str, job_id: str, payload: AnalysisRequest) 
         payload.duplicate_policy,
     )
 
-    run_dir = RUN_STORE / session_id / job_id
+    run_dir = RUN_STORE / _safe_identifier(session_id) / _safe_identifier(job_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     missing_path = run_dir / "missing_in_hr.csv"
     departure_path = run_dir / "found_in_departure.csv"
@@ -132,33 +140,38 @@ async def _run_analysis(session_id: str, job_id: str, payload: AnalysisRequest) 
 
 
 @app.post("/api/sessions/{session_id}/analyze")
-async def start_analysis(session_id: str, payload: AnalysisRequest) -> dict[str, str]:
+async def start_analysis(session_id: UUID, payload: AnalysisRequest) -> dict[str, str]:
+    session_key = _safe_identifier(str(session_id))
     try:
-        session = store.get(session_id)
+        session = store.get(session_key)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
 
     job_id = store.next_job_id()
     session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.PENDING, detail="queued")
-    asyncio.create_task(_run_analysis(session_id, job_id, payload))
-    return {"session_id": session_id, "job_id": job_id, "status": JobStatus.PENDING.value}
+    asyncio.create_task(_run_analysis(session_key, job_id, payload))
+    return {"session_id": session_key, "job_id": job_id, "status": JobStatus.PENDING.value}
 
 
 @app.get("/api/sessions/{session_id}/jobs/{job_id}")
-async def get_job(session_id: str, job_id: str) -> dict[str, object]:
+async def get_job(session_id: UUID, job_id: UUID) -> dict[str, object]:
+    session_key = _safe_identifier(str(session_id))
+    job_key = _safe_identifier(str(job_id))
     try:
-        session = store.get(session_id)
-        job = session.jobs[job_id]
+        session = store.get(session_key)
+        job = session.jobs[job_key]
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="job not found") from exc
     return job.model_dump()
 
 
 @app.get("/api/sessions/{session_id}/jobs/{job_id}/download/{artifact}")
-async def download_artifact(session_id: str, job_id: str, artifact: str) -> FileResponse:
+async def download_artifact(session_id: UUID, job_id: UUID, artifact: str) -> FileResponse:
+    session_key = _safe_identifier(str(session_id))
+    job_key = _safe_identifier(str(job_id))
     try:
-        session = store.get(session_id)
-        job = session.jobs[job_id]
+        session = store.get(session_key)
+        job = session.jobs[job_key]
         if not job.result:
             raise KeyError("result unavailable")
         path = Path(job.result.artifacts[artifact])
@@ -170,9 +183,10 @@ async def download_artifact(session_id: str, job_id: str, artifact: str) -> File
 
 
 @app.get("/api/sessions/{session_id}/runs")
-async def list_runs(session_id: str) -> dict[str, object]:
+async def list_runs(session_id: UUID) -> dict[str, object]:
+    session_key = _safe_identifier(str(session_id))
     try:
-        session = store.get(session_id)
+        session = store.get(session_key)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
-    return {"session_id": session_id, "runs": session.runs}
+    return {"session_id": session_key, "runs": session.runs}
