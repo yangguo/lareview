@@ -44,8 +44,32 @@ def analyze_access(
     departure_id: str,
     duplicate_policy: DuplicatePolicy,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, list[int]]]:
-    merged_hr = pd.merge(system_df, hr_df, left_on=system_id, right_on=hr_id, how="left")
-    merged_departure = pd.merge(system_df, departure_df, left_on=system_id, right_on=departure_id, how="inner")
+    left = system_df.copy()
+    active = hr_df.copy()
+    departure = departure_df.copy()
+
+    left["_normalized_system_id"] = left[system_id].astype(str).map(normalize_identity)
+    active["_normalized_hr_id"] = active[hr_id].astype(str).map(normalize_identity)
+    departure["_normalized_departure_id"] = departure[departure_id].astype(str).map(normalize_identity)
+
+    merged_hr = pd.merge(
+        left,
+        active,
+        left_on="_normalized_system_id",
+        right_on="_normalized_hr_id",
+        how="left",
+    )
+    merged_departure = pd.merge(
+        left,
+        departure,
+        left_on="_normalized_system_id",
+        right_on="_normalized_departure_id",
+        how="inner",
+    )
     missing_in_hr = merged_hr[merged_hr[hr_id].isnull()]
     duplicates = duplicate_groups(system_df[system_id].astype(str).tolist(), duplicate_policy)
-    return missing_in_hr, merged_departure, duplicates
+    return (
+        missing_in_hr.drop(columns=["_normalized_system_id", "_normalized_hr_id"], errors="ignore"),
+        merged_departure.drop(columns=["_normalized_system_id", "_normalized_departure_id"], errors="ignore"),
+        duplicates,
+    )
