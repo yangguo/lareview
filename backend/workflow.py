@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict, cast
 
 from langgraph.graph import END, StateGraph
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from .classifier import HeuristicClassifier, build_classification
 from .errors import AmbiguousTableError
@@ -79,6 +82,15 @@ class DetectionWorkflow:
         return state
 
     def validate(self, state: WorkflowState) -> WorkflowState:
+        """Validate classifications and build a ConfirmedMapping.
+
+        When distinct HR_ACTIVE and HR_DEPARTURE tables are both present
+        they are used directly.  When a table is classified as HR_STATUS
+        (i.e. has user + status columns but the status values don't clearly
+        indicate active vs. departure) it serves as a *dual-purpose fallback*
+        — the same table is mapped to both the active and departure slots.
+        This requires manual confirmation via the /confirm endpoint.
+        """
         classifications = state.get("classifications", [])
         low_conf = [c for c in classifications if c.confidence_level == ConfidenceLevel.LOW]
         if low_conf:
@@ -87,22 +99,26 @@ class DetectionWorkflow:
             return state
 
         system = next((c for c in classifications if c.table_type == TableType.SYSTEM_ACCESS), None)
-        hr_candidates = [c for c in classifications if c.table_type in {TableType.HR_ACTIVE, TableType.HR_DEPARTURE, TableType.HR_STATUS}]
+        hr_active = next((c for c in classifications if c.table_type == TableType.HR_ACTIVE), None)
+        hr_departure = next((c for c in classifications if c.table_type == TableType.HR_DEPARTURE), None)
+        hr_status = next((c for c in classifications if c.table_type == TableType.HR_STATUS), None)
 
-        if not system or len(hr_candidates) == 0:
+        if not system or (not hr_active and not hr_status) or (not hr_departure and not hr_status):
             state["requires_confirmation"] = True
             state["status"] = "needs_confirmation"
             state.setdefault("errors", []).append("could not deterministically map required tables")
             return state
 
-        hr_primary = hr_candidates[0]
+        active_table = cast(ClassificationResult, hr_active or hr_status)
+        departure_table = cast(ClassificationResult, hr_departure or hr_status)
+
         mapping = ConfirmedMapping(
             system_access_table_id=system.table_id,
             system_access_id_column=system.key_columns[0] if system.key_columns else "",
-            hr_active_table_id=hr_primary.table_id,
-            hr_active_id_column=hr_primary.key_columns[0] if hr_primary.key_columns else "",
-            hr_departure_table_id=hr_primary.table_id,
-            hr_departure_id_column=hr_primary.key_columns[0] if hr_primary.key_columns else "",
+            hr_active_table_id=active_table.table_id,
+            hr_active_id_column=active_table.key_columns[0] if active_table.key_columns else "",
+            hr_departure_table_id=departure_table.table_id,
+            hr_departure_id_column=departure_table.key_columns[0] if departure_table.key_columns else "",
         )
         state["suggested_mapping"] = mapping
         state["status"] = "ready"
@@ -126,7 +142,7 @@ class DetectionWorkflow:
         self._persist_state(state)
         return state
 
-    def run(self, *, session_id: str, run_id: str, candidates: list[CandidateTable], frames: dict[str, object]) -> DetectionResponse:
+    def run(self, *, session_id: str, run_id: str, candidates: list[CandidateTable], frames: dict[str, "pd.DataFrame"]) -> DetectionResponse:
         profiles = {table_id: profile_table(frame) for table_id, frame in frames.items()}
         state: WorkflowState = {
             "session_id": session_id,

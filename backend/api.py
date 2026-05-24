@@ -1,20 +1,29 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from uuid import UUID
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .errors import EmptyDatasetError, InvalidFileError, MissingColumnError
 from .ingestion import load_tables, to_candidates
 from .matching import analyze_access
-from .models import AnalysisRequest, AnalysisResult, JobState, JobStatus, SessionCreateResponse
+from .models import AnalysisRequest, AnalysisResult, ConfirmedMapping, JobState, JobStatus, SessionCreateResponse
 from .sessions import RUN_STORE, SessionStore
 from .workflow import DetectionWorkflow
 
 app = FastAPI(title="lareview-agent-backend", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 store = SessionStore()
 detection = DetectionWorkflow(run_store=RUN_STORE)
 
@@ -43,6 +52,7 @@ async def upload_files(session_id: UUID, files: list[UploadFile] = File(...)) ->
         raise HTTPException(status_code=404, detail="session not found") from exc
 
     all_candidates = []
+    parsed_frames: dict[str, object] = {}
     for file in files:
         raw = await file.read()
         try:
@@ -50,10 +60,13 @@ async def upload_files(session_id: UUID, files: list[UploadFile] = File(...)) ->
             frames, candidates = to_candidates(file.filename or "upload", tables)
         except (InvalidFileError, EmptyDatasetError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        session.tables.update(frames)
+        parsed_frames.update(frames)
         all_candidates.extend(candidates)
 
-    session.candidates = all_candidates
+    async with session.lock:
+        session.tables.update(parsed_frames)
+        session.candidates = all_candidates
+
     return {"session_id": session_key, "candidates": [c.model_dump() for c in all_candidates]}
 
 
@@ -66,7 +79,8 @@ async def detect_tables(session_id: UUID) -> dict[str, object]:
         raise HTTPException(status_code=404, detail="session not found") from exc
 
     run_id = store.next_run_id()
-    session.runs.append(run_id)
+    async with session.lock:
+        session.runs.append(run_id)
     detection_resp = detection.run(
         session_id=session_key,
         run_id=run_id,
@@ -77,27 +91,44 @@ async def detect_tables(session_id: UUID) -> dict[str, object]:
 
 
 @app.post("/api/sessions/{session_id}/confirm")
-async def confirm_mapping(session_id: UUID, mapping: dict[str, str]) -> dict[str, str]:
+async def confirm_mapping(session_id: UUID, mapping: ConfirmedMapping) -> dict[str, str]:
     session_key = _safe_identifier(str(session_id))
     try:
         session = store.get(session_key)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
-    session.mapping = mapping
+    async with session.lock:
+        session.mapping = mapping
+        session.mapping_confirmed = True
     return {"session_id": session_key, "status": "mapping_saved"}
 
 
 async def _run_analysis(session_id: str, job_id: str, payload: AnalysisRequest) -> None:
-    session = store.get(session_id)
-    session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.RUNNING, detail="analysis running")
+    """Run access- reconciliation analysis as a background task.
 
-    mapping = payload.mapping
+    Design: analysis always reads the mapping from session.mapping (set by
+    /confirm), not from the request payload.  The /analyze endpoint gate-
+    checks session.mapping_confirmed, so a confirmed mapping must exist
+    before execution reaches this point.  The payload contributes only the
+    duplicate_policy — the mapping is the single confirmed source of truth.
+    """
+    session = store.get(session_id)
+
+    async with session.lock:
+        if not session.mapping_confirmed:
+            session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.FAILED, detail="mapping not confirmed")
+            return
+        session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.RUNNING, detail="analysis running")
+
+    mapping = session.mapping
+    assert mapping is not None  # guaranteed by mapping_confirmed check above
     try:
         system_df = session.tables[mapping.system_access_table_id]
         hr_df = session.tables[mapping.hr_active_table_id]
         dep_df = session.tables[mapping.hr_departure_table_id]
     except KeyError as exc:
-        session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.FAILED, detail=f"missing table: {exc}")
+        async with session.lock:
+            session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.FAILED, detail=f"missing table: {exc}")
         return
 
     for table, col in (
@@ -106,7 +137,8 @@ async def _run_analysis(session_id: str, job_id: str, payload: AnalysisRequest) 
         (dep_df, mapping.hr_departure_id_column),
     ):
         if col not in table.columns:
-            session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.FAILED, detail=str(MissingColumnError(col)))
+            async with session.lock:
+                session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.FAILED, detail=str(MissingColumnError(col)))
             return
 
     missing, found_dep, dup = analyze_access(
@@ -119,12 +151,17 @@ async def _run_analysis(session_id: str, job_id: str, payload: AnalysisRequest) 
         payload.duplicate_policy,
     )
 
-    run_dir = RUN_STORE / _safe_identifier(session_id) / _safe_identifier(job_id)
-    run_dir.mkdir(parents=True, exist_ok=True)
-    missing_path = run_dir / "missing_in_hr.csv"
-    departure_path = run_dir / "found_in_departure.csv"
-    missing.to_csv(missing_path, index=False)
-    found_dep.to_csv(departure_path, index=False)
+    try:
+        run_dir = RUN_STORE / _safe_identifier(session_id) / _safe_identifier(job_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        missing_path = run_dir / "missing_in_hr.csv"
+        departure_path = run_dir / "found_in_departure.csv"
+        missing.to_csv(missing_path, index=False)
+        found_dep.to_csv(departure_path, index=False)
+    except (OSError, IOError) as exc:
+        async with session.lock:
+            session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.FAILED, detail=f"io error: {exc}")
+        return
 
     result = AnalysisResult(
         run_id=job_id,
@@ -136,7 +173,8 @@ async def _run_analysis(session_id: str, job_id: str, payload: AnalysisRequest) 
         duplicate_groups=dup,
         artifacts={"missing_in_hr": str(missing_path), "found_in_departure": str(departure_path)},
     )
-    session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.DONE, detail="analysis complete", result=result)
+    async with session.lock:
+        session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.DONE, detail="analysis complete", result=result)
 
 
 @app.post("/api/sessions/{session_id}/analyze")
@@ -148,7 +186,10 @@ async def start_analysis(session_id: UUID, payload: AnalysisRequest) -> dict[str
         raise HTTPException(status_code=404, detail="session not found") from exc
 
     job_id = store.next_job_id()
-    session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.PENDING, detail="queued")
+    async with session.lock:
+        if not session.mapping_confirmed:
+            raise HTTPException(status_code=400, detail="mapping must be confirmed before analysis")
+        session.jobs[job_id] = JobState(job_id=job_id, status=JobStatus.PENDING, detail="queued")
     asyncio.create_task(_run_analysis(session_key, job_id, payload))
     return {"session_id": session_key, "job_id": job_id, "status": JobStatus.PENDING.value}
 
@@ -174,7 +215,10 @@ async def download_artifact(session_id: UUID, job_id: UUID, artifact: str) -> Fi
         job = session.jobs[job_key]
         if not job.result:
             raise KeyError("result unavailable")
-        path = Path(job.result.artifacts[artifact])
+        path = Path(job.result.artifacts[artifact]).resolve()
+        path.relative_to(RUN_STORE.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="invalid artifact path")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="artifact not found") from exc
     if not path.exists():

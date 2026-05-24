@@ -20,13 +20,14 @@ def duplicate_groups(values: list[str], policy: DuplicatePolicy) -> dict[str, li
         for idx, val in enumerate(values):
             grouped[normalize_identity(val)].append(idx)
     else:
-        for idx, val in enumerate(values):
-            key = normalize_identity(val)
+        indexed = [(idx, normalize_identity(val)) for idx, val in enumerate(values)]
+        indexed.sort(key=lambda x: len(x[1]))
+        for idx, key in indexed:
             if not key:
                 continue
             matched = False
             for existing in list(grouped.keys()):
-                if key in existing or existing in key:
+                if existing in key:
                     grouped[existing].append(idx)
                     matched = True
                     break
@@ -44,6 +45,16 @@ def analyze_access(
     departure_id: str,
     duplicate_policy: DuplicatePolicy,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, list[int]]]:
+    """Reconcile system access against HR active and departure lists.
+
+    All ID comparisons are done on normalized values (lowercased, alnum-only)
+    regardless of the duplicate_policy. The policy only affects duplicate
+    detection granularity within the system access list itself.
+
+    Returns (missing_in_hr_df, found_in_departure_df, duplicate_groups).
+    duplicate_groups maps a representative key to a list of *row indices*
+    into system_df.
+    """
     left = system_df.copy()
     active = hr_df.copy()
     departure = departure_df.copy()
@@ -66,7 +77,7 @@ def analyze_access(
         right_on="_normalized_departure_id",
         how="inner",
     )
-    missing_in_hr = merged_hr[merged_hr[hr_id].isnull()]
+    missing_in_hr = merged_hr[merged_hr["_normalized_hr_id"].isnull()]
     duplicates = duplicate_groups(system_df[system_id].astype(str).tolist(), duplicate_policy)
     return (
         missing_in_hr.drop(columns=["_normalized_system_id", "_normalized_hr_id"], errors="ignore"),

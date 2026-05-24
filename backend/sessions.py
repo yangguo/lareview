@@ -7,10 +7,13 @@ import uuid
 
 import pandas as pd
 
-from .models import CandidateTable, JobState
+from .models import CandidateTable, ConfirmedMapping, JobState
 
 RUN_STORE = Path("/tmp/lareview_runs")
 RUN_STORE.mkdir(parents=True, exist_ok=True)
+
+# Sessions live in memory only — no TTL or eviction.
+# In multi-user deployments, add a background task to reap idle sessions.
 
 
 @dataclass
@@ -18,9 +21,11 @@ class SessionState:
     session_id: str
     tables: dict[str, pd.DataFrame] = field(default_factory=dict)
     candidates: list[CandidateTable] = field(default_factory=list)
-    mapping: dict[str, str] = field(default_factory=dict)
+    mapping: ConfirmedMapping | None = None
+    mapping_confirmed: bool = False
     runs: list[str] = field(default_factory=list)
     jobs: dict[str, JobState] = field(default_factory=dict)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class SessionStore:

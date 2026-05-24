@@ -16,26 +16,52 @@ class HeuristicClassifier:
     prompt_version: str = "v1"
 
     def classify(self, candidate: CandidateTable, profile: dict[str, object]) -> dict[str, object]:
-        columns = [c.lower() for c in candidate.columns]
-        has_user = any(any(t in col for t in ("user", "account", "login", "email", "emp")) for col in columns)
-        has_status = any(any(t in col for t in ("status", "state", "termination", "depart", "left")) for col in columns)
-        score = 0.4
+        columns_lower = [c.lower() for c in candidate.columns]
+        user_hints = {"user", "account", "login", "email", "emp"}
+        status_hints = {"status", "state", "termination", "departure", "left"}
+        hr_hints = {"name", "department", "dept", "manager", "title", "hire", "dob", "phone", "address"}
+        access_hints = {"entitle", "permission", "role", "access", "priv", "group"}
+
+        has_user = any(any(t in col for t in user_hints) for col in columns_lower)
+        has_status = any(any(t in col for t in status_hints) for col in columns_lower)
+        has_hr = any(any(t in col for t in hr_hints) for col in columns_lower)
+        has_access = any(any(t in col for t in access_hints) for col in columns_lower)
+
+        score = 0.35
         table_type = TableType.UNKNOWN
         key_cols: list[str] = []
 
         if has_user:
-            key_cols = [c for c in candidate.columns if any(t in c.lower() for t in ("user", "account", "login", "email", "emp"))][:1]
-            score += 0.3
-        if has_status:
-            score += 0.2
-        status_values = profile.get("status_values", [])
-        if status_values:
-            score += 0.1
+            key_cols = [c for c in candidate.columns if any(t in c.lower() for t in user_hints)][:1]
+            score += 0.25
+
+        if has_status or has_hr or has_access:
+            score += 0.25
+
+        status_values = set(profile.get("status_values", []))
+
+        departure_values = {"departed", "left", "terminated"}
+        active_values = {"active", "inactive"}
 
         if has_user and has_status:
-            table_type = TableType.HR_STATUS
+            if status_values & departure_values:
+                table_type = TableType.HR_DEPARTURE
+                score += 0.15
+            elif status_values & active_values:
+                table_type = TableType.HR_ACTIVE
+                score += 0.15
+            else:
+                table_type = TableType.HR_STATUS
         elif has_user and not has_status:
-            table_type = TableType.SYSTEM_ACCESS
+            if has_hr and not has_access:
+                table_type = TableType.HR_ACTIVE
+            elif has_access and not has_hr:
+                table_type = TableType.SYSTEM_ACCESS
+            else:
+                table_type = TableType.SYSTEM_ACCESS
+
+        if has_user and key_cols:
+            score += 0.05
 
         return {
             "table_type": table_type.value,
