@@ -1,10 +1,11 @@
 pandas
 xlrd
 openpyxl
-streamlit
 fastapi
 uvicorn
 python-multipart
 pydantic
+langchain
+langchain-openai
 langgraph
-pytest
+python-dotenv

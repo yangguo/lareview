@@ -17,10 +17,12 @@ class HeuristicClassifier:
 
     def classify(self, candidate: CandidateTable, profile: dict[str, object]) -> dict[str, object]:
         columns_lower = [c.lower() for c in candidate.columns]
-        user_hints = {"user", "account", "login", "email", "emp"}
-        status_hints = {"status", "state", "termination", "departure", "left"}
-        hr_hints = {"name", "department", "dept", "manager", "title", "hire", "dob", "phone", "address"}
-        access_hints = {"entitle", "permission", "role", "access", "priv", "group"}
+        user_hints = {"user", "account", "login", "email", "emp", "用户", "账号", "工号", "编码", "用户名", "员工", "人员"}
+        status_hints = {"status", "state", "termination", "departure", "left", "离职", "离司", "状态", "入职", "在岗"}
+        hr_hints = {"name", "department", "dept", "manager", "title", "hire", "dob", "phone", "address",
+                     "姓名", "部门", "岗位", "职位", "入职日期", "出生", "性别", "身份证", "门店"}
+        access_hints = {"entitle", "permission", "role", "access", "priv", "group",
+                        "权限", "认证", "密码", "锁定", "安全", "角色", "系统", "模块"}
 
         has_user = any(any(t in col for t in user_hints) for col in columns_lower)
         has_status = any(any(t in col for t in status_hints) for col in columns_lower)
@@ -40,14 +42,21 @@ class HeuristicClassifier:
 
         status_values = set(profile.get("status_values", []))
 
-        departure_values = {"departed", "left", "terminated"}
-        active_values = {"active", "inactive"}
+        departure_values = {"departed", "left", "terminated", "离职", "离司", "退休", "协商解除", "本人解除", "单位解除"}
+        active_values = {"active", "inactive", "在职", "在岗", "普通", "正常"}
+
+        # Check column names for departure/active hints too
+        has_departure_col = any("离职" in c or "离司" in c or "depart" in c.lower() for c in candidate.columns)
+        has_hire_col = any("入职" in c or "hire" in c.lower() for c in candidate.columns)
 
         if has_user and has_status:
-            if status_values & departure_values:
+            if status_values & departure_values or has_departure_col:
                 table_type = TableType.HR_DEPARTURE
                 score += 0.15
             elif status_values & active_values:
+                table_type = TableType.HR_ACTIVE
+                score += 0.15
+            elif has_hire_col:
                 table_type = TableType.HR_ACTIVE
                 score += 0.15
             else:
