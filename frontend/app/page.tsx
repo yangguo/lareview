@@ -79,11 +79,9 @@ export default function HomePage() {
     const assistantMsg: ChatMessage = { role: "assistant", content: "正在处理中，请稍候..." };
     setMessages((prev) => [...prev, assistantMsg]);
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 min timeout
-
     try {
-      const res = await fetch("/api/chat", {
+      // Submit as non-streaming to avoid Edge Function timeout
+      const submitRes = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -92,67 +90,50 @@ export default function HomePage() {
             { role: "user", content: text + fileHint },
           ],
           session_id: sessionId,
-          stream: true,
+          stream: false,
         }),
-        signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
+      if (!submitRes.ok) throw new Error("服务器无响应");
+      const { task_id } = await submitRes.json();
+      if (!task_id) throw new Error("未获取到任务ID");
 
-      if (!res.ok || !res.body) throw new Error("服务器无响应");
+      // Poll for result every 3 seconds
+      let dots = 0;
+      const maxPolls = 200; // ~10 min
+      for (let i = 0; i < maxPolls; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const pollRes = await fetch(`/api/chat/result/${task_id}`);
+        if (!pollRes.ok) continue;
+        const data = await pollRes.json();
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let content = "";
-      let hasContent = false;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const payload = line.slice(6);
-            if (payload === "[DONE]") continue;
-            try {
-              const json = JSON.parse(payload);
-              const delta = json.choices?.[0]?.delta?.content;
-              if (delta) {
-                // Skip heartbeat dots
-                if (delta === "..." || delta === "……") continue;
-                if (!hasContent) {
-                  content = "";
-                  hasContent = true;
-                }
-                content += delta;
-                setMessages((prev) => {
-                  const next = [...prev];
-                  next[next.length - 1] = { role: "assistant", content };
-                  return next;
-                });
-              }
-              if (json.error) {
-                throw new Error(json.error.message || "服务器错误");
-              }
-            } catch (e) {
-              if ((e as Error).message !== "服务器错误" && (e as Error).message !== "服务器无响应") {
-                continue; // skip non-JSON SSE
-              }
-              throw e;
-            }
-          }
+        if (data.status === "completed") {
+          const content = data.choices?.[0]?.message?.content ?? "分析完成，无内容返回。";
+          setMessages((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = { role: "assistant", content };
+            return next;
+          });
+          break;
         }
+        if (data.status === "error") {
+          throw new Error(data.error || "处理失败");
+        }
+        dots = (dots + 1) % 4;
+        setMessages((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = { role: "assistant", content: "正在处理中" + ".".repeat(dots + 1) };
+          return next;
+        });
       }
     } catch (e) {
-      const errMsg = (e as Error).name === "AbortError" ? "请求超时，请重试" : `错误: ${(e as Error).message}`;
+      const errMsg = `错误: ${(e as Error).message}`;
       setMessages((prev) => {
         const next = [...prev];
         next[next.length - 1] = { role: "assistant", content: errMsg };
         return next;
       });
     } finally {
-      clearTimeout(timeoutId);
       setBusy(false);
     }
   }
