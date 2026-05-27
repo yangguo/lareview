@@ -2,8 +2,6 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
-const BACKEND = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -85,7 +83,7 @@ export default function HomePage() {
     const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 min timeout
 
     try {
-      const res = await fetch(`${BACKEND}/v1/chat/completions`, {
+      const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
