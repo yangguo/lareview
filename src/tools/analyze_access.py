@@ -4,6 +4,7 @@ import sys
 import uuid
 from pathlib import Path
 
+import pandas as pd
 from langchain.tools import tool
 
 _workdir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,15 +27,18 @@ def analyze_access_reconciliation(mapping_json: str, duplicate_policy: str = "no
     Must be called after classify_tables and after the user confirms the mapping.
     Reads DataFrames from the in-memory cache (no file re-reading needed).
 
+    hr_active fields are OPTIONAL — leave empty ("") if no HR active list is available.
+    In that case only departure reconciliation and duplicate detection are performed.
+
     Args:
         mapping_json: JSON string with the confirmed mapping:
             {
-              "system_access_table_id": "...",
-              "system_access_id_column": "...",
-              "hr_active_table_id": "...",
-              "hr_active_id_column": "...",
-              "hr_departure_table_id": "...",
-              "hr_departure_id_column": "..."
+              "system_access_table_id": "...",     (required)
+              "system_access_id_column": "...",     (required)
+              "hr_active_table_id": "...",          (optional, "" to skip)
+              "hr_active_id_column": "...",         (optional, "" to skip)
+              "hr_departure_table_id": "...",       (required)
+              "hr_departure_id_column": "..."       (required)
             }
         duplicate_policy: "exact" / "normalized" / "substring". Default "normalized".
 
@@ -46,31 +50,34 @@ def analyze_access_reconciliation(mapping_json: str, duplicate_policy: str = "no
     except json.JSONDecodeError:
         return json.dumps({"error": "invalid mapping JSON"}, ensure_ascii=False)
 
-    # Validate mapping has all required fields
+    # Validate required fields (hr_active is optional)
     required = [
         "system_access_table_id", "system_access_id_column",
-        "hr_active_table_id", "hr_active_id_column",
         "hr_departure_table_id", "hr_departure_id_column",
     ]
     missing = [k for k in required if not mapping.get(k)]
     if missing:
-        return json.dumps({"error": f"missing mapping fields: {missing}", "hint": "请先运行 classify_tables 并确认映射关系"}, ensure_ascii=False)
+        return json.dumps({"error": f"missing mapping fields: {missing}", "hint": "请至少提供系统账号表和HR离职表"}, ensure_ascii=False)
 
-    # Load DataFrames from in-memory cache (populated by ingest_files)
+    has_active = bool(mapping.get("hr_active_table_id") and mapping.get("hr_active_id_column"))
+
+    # Load DataFrames from in-memory cache
     try:
         system_df = frame_get(mapping["system_access_table_id"])
-        hr_df = frame_get(mapping["hr_active_table_id"])
+        if has_active:
+            hr_df = frame_get(mapping["hr_active_table_id"])
+        else:
+            hr_df = pd.DataFrame({mapping["system_access_id_column"]: []})
         dep_df = frame_get(mapping["hr_departure_table_id"])
     except KeyError as e:
         return json.dumps({
             "error": str(e),
-            "hint": "DataFrame 缓存中找不到对应表，请确保 ingest_files 已先执行。尝试重新上传文件后再试。"
+            "hint": "DataFrame 缓存中找不到对应表，请确保 ingest_files 已先执行。"
         }, ensure_ascii=False)
 
     # Validate ID columns exist
     for df, col, label in [
         (system_df, mapping["system_access_id_column"], "系统账号表"),
-        (hr_df, mapping["hr_active_id_column"], "HR在职表"),
         (dep_df, mapping["hr_departure_id_column"], "HR离职表"),
     ]:
         if col not in df.columns:
@@ -92,7 +99,7 @@ def analyze_access_reconciliation(mapping_json: str, duplicate_policy: str = "no
     try:
         missing, found_dep, dup = analyze_access(
             system_df, mapping["system_access_id_column"],
-            hr_df, mapping["hr_active_id_column"],
+            hr_df, mapping.get("hr_active_id_column", mapping["system_access_id_column"]),
             dep_df, mapping["hr_departure_id_column"],
             policy,
         )
@@ -116,14 +123,14 @@ def analyze_access_reconciliation(mapping_json: str, duplicate_policy: str = "no
     return json.dumps({
         "job_id": job_id,
         "duplicate_policy": duplicate_policy,
-        "missing_in_hr_count": missing.shape[0],
+        "missing_in_hr_count": missing.shape[0] if has_active else -1,
         "found_in_departure_count": found_dep.shape[0],
         "duplicate_group_count": len(dup),
-        "missing_in_hr_preview": missing.astype(str).head(20).to_dict(orient="records"),
+        "missing_in_hr_preview": missing.astype(str).head(20).to_dict(orient="records") if has_active else [],
         "found_in_departure_preview": found_dep.astype(str).head(20).to_dict(orient="records"),
         "duplicate_groups": dup,
         "artifact_downloads": {
-            "missing_in_hr": f"/download/{job_id}/missing_in_hr",
+            "missing_in_hr": f"/download/{job_id}/missing_in_hr" if has_active else None,
             "found_in_departure": f"/download/{job_id}/found_in_departure",
         },
     }, ensure_ascii=False, indent=2)
