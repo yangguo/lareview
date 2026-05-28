@@ -14,7 +14,7 @@ if _workdir not in sys.path:
 from backend.matching import analyze_access
 from backend.models import DuplicatePolicy
 from src.tools.frame_store import get as frame_get
-from src.tools.classify_tables import _last_mapping
+import src.tools.classify_tables as _ct
 
 RUN_STORE = Path("/tmp/lareview_runs")
 RUN_STORE.mkdir(parents=True, exist_ok=True)
@@ -53,10 +53,10 @@ def analyze_access_reconciliation(mapping_json: str, duplicate_policy: str = "no
 
     # Merge with stored mapping from classify_tables — recovers table_ids
     # if the agent lost them across conversation rounds
-    if _last_mapping:
+    if _ct._last_mapping:
         for key in ["system_access_table_id", "hr_active_table_id", "hr_departure_table_id"]:
             agent_val = mapping.get(key, "")
-            stored_val = _last_mapping.get(key, "")
+            stored_val = _ct._last_mapping.get(key, "")
             # Use stored table_id if agent didn't provide one or provided a bad one
             if not agent_val:
                 mapping[key] = stored_val
@@ -69,7 +69,7 @@ def analyze_access_reconciliation(mapping_json: str, duplicate_policy: str = "no
         # Agent's column name choices always take priority
         for key in ["system_access_id_column", "hr_active_id_column", "hr_departure_id_column"]:
             if not mapping.get(key):
-                mapping[key] = _last_mapping.get(key, "")
+                mapping[key] = _ct._last_mapping.get(key, "")
 
     # Validate required fields (hr_active is optional)
     required = [
@@ -103,8 +103,9 @@ def analyze_access_reconciliation(mapping_json: str, duplicate_policy: str = "no
     ]:
         if col not in df.columns:
             return json.dumps({
-                "error": f"{label}中找不到列 '{col}'",
+                "error": f"{label}中找不到列 '{col}'，请检查ID列名是否正确",
                 "available_columns": list(df.columns),
+                "mapping_used": mapping,
             }, ensure_ascii=False)
 
     # Validate duplicate policy
@@ -125,7 +126,7 @@ def analyze_access_reconciliation(mapping_json: str, duplicate_policy: str = "no
             policy,
         )
     except Exception as e:
-        return json.dumps({"error": f"分析执行失败: {e}"}, ensure_ascii=False)
+        return json.dumps({"error": f"分析执行失败: {e}", "mapping_used": mapping}, ensure_ascii=False)
 
     # Write output XLSX
     job_id = uuid.uuid4().hex
