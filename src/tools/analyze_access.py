@@ -14,6 +14,7 @@ if _workdir not in sys.path:
 from backend.matching import analyze_access
 from backend.models import DuplicatePolicy
 from src.tools.frame_store import get as frame_get
+from src.tools.classify_tables import _last_mapping
 
 RUN_STORE = Path("/tmp/lareview_runs")
 RUN_STORE.mkdir(parents=True, exist_ok=True)
@@ -49,6 +50,26 @@ def analyze_access_reconciliation(mapping_json: str, duplicate_policy: str = "no
         mapping = json.loads(mapping_json)
     except json.JSONDecodeError:
         return json.dumps({"error": "invalid mapping JSON"}, ensure_ascii=False)
+
+    # Merge with stored mapping from classify_tables — recovers table_ids
+    # if the agent lost them across conversation rounds
+    if _last_mapping:
+        for key in ["system_access_table_id", "hr_active_table_id", "hr_departure_table_id"]:
+            agent_val = mapping.get(key, "")
+            stored_val = _last_mapping.get(key, "")
+            # Use stored table_id if agent didn't provide one or provided a bad one
+            if not agent_val:
+                mapping[key] = stored_val
+            elif agent_val != stored_val:
+                # Check if agent's table_id exists in frame_store
+                try:
+                    frame_get(agent_val)
+                except KeyError:
+                    mapping[key] = stored_val
+        # Agent's column name choices always take priority
+        for key in ["system_access_id_column", "hr_active_id_column", "hr_departure_id_column"]:
+            if not mapping.get(key):
+                mapping[key] = _last_mapping.get(key, "")
 
     # Validate required fields (hr_active is optional)
     required = [

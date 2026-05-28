@@ -15,6 +15,9 @@ from src.tools.frame_store import get as frame_get
 
 classifier = HeuristicClassifier()
 
+# Module-level store so analyze_access_reconciliation can recover table_ids
+_last_mapping: dict[str, str] = {}
+
 
 @tool
 def classify_tables(candidates_json: str) -> str:
@@ -115,6 +118,11 @@ def classify_tables(candidates_json: str) -> str:
         if ttype in best:
             mapping[key[0]] = best[ttype]["table_id"]
             mapping[key[1]] = (best[ttype].get("key_columns", [""]) or [""])[0]
+
+    # Store mapping so analyze_access_reconciliation can recover table_ids
+    # even if the agent loses them across conversation rounds
+    global _last_mapping
+    _last_mapping = dict(mapping)
 
     requires_confirmation = any(
         c.get("confidence_level") in ("low", "medium") for c in classifications
