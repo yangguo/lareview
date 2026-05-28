@@ -40,11 +40,15 @@ def _read_excel(raw_bytes: bytes, filename: str) -> list[tuple[str, pd.DataFrame
         if raw.empty:
             continue
 
-        # Detect if the first row looks like data rather than headers
-        cols_lower = [str(c).lower() for c in raw.columns]
-        unnamed_count = sum(1 for c in cols_lower if "unnamed" in c or str(c).isdigit())
+        # Detect if the first row looks like a title row rather than real headers.
+        #   (a) "Unnamed: N" or pure digits → pandas didn't find headers
+        #   (b) Many ".N" suffixes → pandas deduplicated identical title-row values
+        cols_raw = [str(c) for c in raw.columns]
+        import re as _re
+        unnamed_count = sum(1 for c in cols_raw if "unnamed" in str(c).lower() or str(c).isdigit())
+        deduped_count = sum(1 for c in cols_raw if _re.search(r"\.\d+$", str(c)))
 
-        if unnamed_count >= len(raw.columns) * 0.7:
+        if unnamed_count >= len(raw.columns) * 0.7 or deduped_count >= len(raw.columns) * 0.5:
             # Re-read without header, then scan for the real header row
             df = pd.read_excel(BytesIO(raw_bytes), sheet_name=sheet, header=None, dtype=str, engine=engine)
             header_row = 0
