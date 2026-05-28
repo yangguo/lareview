@@ -51,7 +51,7 @@ def _read_excel(raw_bytes: bytes, filename: str) -> list[tuple[str, pd.DataFrame
         if unnamed_count >= len(raw.columns) * 0.7 or deduped_count >= len(raw.columns) * 0.5:
             # Re-read without header, then scan for the real header row
             df = pd.read_excel(BytesIO(raw_bytes), sheet_name=sheet, header=None, dtype=str, engine=engine)
-            header_row = 0
+            header_row = -1
             for row_idx in range(min(15, len(df))):
                 row_vals = [str(v).strip() for v in df.iloc[row_idx].tolist()]
                 non_empty = sum(1 for v in row_vals if v and v != "nan")
@@ -66,7 +66,7 @@ def _read_excel(raw_bytes: bytes, filename: str) -> list[tuple[str, pd.DataFrame
                     header_row = row_idx
                     break
 
-            if header_row > 0:
+            if header_row >= 0:
                 df.columns = [
                     str(v).strip() if str(v).strip() != "nan" and str(v).strip() != "" else f"Col_{i}"
                     for i, v in enumerate(df.iloc[header_row].tolist())
