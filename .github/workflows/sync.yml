@@ -1,19 +1,57 @@
-name: Sync to Hugging Face hub
+name: Deploy to Hugging Face Spaces
+
 on:
   push:
     branches: [main]
-
-  # to run this workflow manually from the Actions tab
   workflow_dispatch:
 
+concurrency:
+  group: huggingface-space-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  sync-to-hub:
+  deploy:
+    name: Sync Space
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout repository
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 0
-      - name: Push to hub
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push https://vyang:$HF_TOKEN@huggingface.co/spaces/vyang/lareview main
+          lfs: true
+
+      - name: Prepare Hugging Face Space bundle
+        run: |
+          rm -rf hf-space
+          mkdir -p hf-space
+          rsync -a \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'hf-space' \
+            --exclude '.venv' \
+            --exclude 'env' \
+            --exclude 'venv' \
+            --exclude 'logs' \
+            --exclude 'assets/uploads' \
+            --exclude 'uploads' \
+            --exclude 'frontend/node_modules' \
+            --exclude 'frontend/.next' \
+            ./ hf-space/
+          cp deploy/huggingface/Dockerfile hf-space/Dockerfile
+          cp deploy/huggingface/.dockerignore hf-space/.dockerignore
+          cp deploy/huggingface/next.config.mjs hf-space/frontend/next.config.mjs
+          cat deploy/huggingface/README.frontmatter README.md > hf-space/README.md
+          mkdir -p hf-space/scripts
+          cp deploy/huggingface/start-space.sh hf-space/scripts/start-space.sh
+
+      - name: Deploy to Hugging Face Space
+        uses: huggingface/hub-sync@v0.1.0
+        with:
+          github_repo_id: ${{ github.repository }}
+          huggingface_repo_id: vyang/lareview
+          hf_token: ${{ secrets.HF_TOKEN }}
+          repo_type: space
+          space_sdk: docker
+          subdirectory: hf-space

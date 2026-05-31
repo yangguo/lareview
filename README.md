@@ -39,6 +39,12 @@ docker build -t lareview-agent .
 docker run -p 8000:8000 --env-file .env lareview-agent
 ```
 
+### Hugging Face Spaces 部署
+
+GitHub Actions 会在 `main` 分支更新后同步到 Hugging Face Docker Space `vyang/lareview`。需要在 GitHub 仓库中配置 `HF_TOKEN` secret（对目标 Space 有写权限），并在 Hugging Face Space 的 Variables and secrets 中配置 `OPENAI_API_KEY` 等运行时变量。
+
+Hugging Face 使用 `deploy/huggingface/Dockerfile` 打包前后端；根目录 `Dockerfile` 保持后端独立部署用途。workflow 会在同步前生成临时 `hf-space/` 目录，并把 HF 专用 Dockerfile 放到该目录根部供 Space 构建。HF 容器在公开端口 `7860` 运行 Next.js 前端，并在容器内部端口 `8000` 运行 FastAPI 后端。
+
 ### 本地开发
 
 ```bash
