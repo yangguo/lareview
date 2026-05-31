@@ -41,7 +41,8 @@ COPY --from=frontend-builder /app/frontend/public ./frontend/public
 COPY scripts/start-space.sh ./scripts/start-space.sh
 
 RUN chmod +x ./scripts/start-space.sh \
-    && mkdir -p /tmp/lareview_runs logs assets/uploads
+    && mkdir -p /tmp/lareview_runs logs assets/uploads \
+    && chmod -R 777 /tmp/lareview_runs logs assets/uploads
 
 EXPOSE 7860
 
